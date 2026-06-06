@@ -45,7 +45,15 @@ export default function Onboarding() {
       const pesoMeta = dados.pesoMeta ? parseFloat(dados.pesoMeta) : estimarPesoMeta(pesoNum, altNum, dados.objetivo)
 
       const perfilDados = {
-        ...dados,
+        nome: dados.nome,
+        genero: dados.genero,
+        objetivo: dados.objetivo,
+        atividade: dados.atividade,
+        treino_tipo: dados.treino_tipo,
+        treino_freq: dados.treino_freq,
+        restricoes: dados.restricoes,
+        refeicoes_dia: dados.refeicoes_dia,
+        tempo_cozinhar: dados.tempo_cozinhar,
         peso: pesoNum,
         altura: altNum,
         idade: idadeNum,
