@@ -5,28 +5,68 @@ import { supabase } from '../lib/supabase'
 import { interpretarRefeicao } from '../lib/ai'
 
 const TIPOS_REFEICAO = [
-  { val: 'cafe', label: 'Café da manhã', icon: '☀️', horario: '07:00' },
-  { val: 'almoco', label: 'Almoço', icon: '🍽️', horario: '12:00' },
-  { val: 'lanche', label: 'Lanche', icon: '🍎', horario: '15:00' },
-  { val: 'jantar', label: 'Jantar', icon: '🌙', horario: '19:00' },
-  { val: 'outro', label: 'Outro', icon: '➕', horario: '' },
+  { val: 'cafe', label: 'Café da manhã', icon: '☀️', horario: '07:00', cats: ['proteina', 'queijo', 'pao', 'fruta', 'bebida'] },
+  { val: 'almoco', label: 'Almoço', icon: '🍽️', horario: '12:00', cats: ['proteina', 'acomp', 'vegetal', 'gordura'] },
+  { val: 'lanche', label: 'Lanche', icon: '🍎', horario: '15:00', cats: ['fruta', 'proteina', 'pao', 'bebida'] },
+  { val: 'jantar', label: 'Jantar', icon: '🌙', horario: '19:00', cats: ['proteina', 'acomp', 'vegetal', 'pao', 'gordura'] },
+  { val: 'outro', label: 'Outro', icon: '➕', horario: '', cats: [] },
 ]
+
+const LABEL_CATS = {
+  proteina: 'Proteínas',
+  queijo: 'Queijos e laticínios',
+  pao: 'Pães e massas',
+  acomp: 'Arroz, grãos e acompanhamentos',
+  vegetal: 'Vegetais',
+  fruta: 'Frutas',
+  gordura: 'Gorduras',
+  bebida: 'Bebidas',
+  personalizado: 'Minhas refeições',
+  marmita: 'Marmitas',
+}
+
+function labelUnidade(unidade, qtd) {
+  const n = parseFloat(qtd) || 1
+  switch (unidade) {
+    case 'g': return `${n}g`
+    case 'unidade': return n === 1 ? '1 unidade' : `${n} unidades`
+    case 'fatia': return n === 1 ? '1 fatia' : `${n} fatias`
+    case 'colher': return n === 1 ? '1 col. sopa' : `${n} col. sopa`
+    case 'concha': return n === 1 ? '1 concha' : `${n} conchas`
+    case 'copo': return n === 1 ? '1 copo' : `${n} copos`
+    case 'scoop': return n === 1 ? '1 scoop' : `${n} scoops`
+    default: return `${n} ${unidade}`
+  }
+}
+
+function placeholderUnidade(unidade) {
+  switch (unidade) {
+    case 'g': return 'Quantidade em gramas'
+    case 'unidade': return 'Quantas unidades?'
+    case 'fatia': return 'Quantas fatias?'
+    case 'colher': return 'Quantas colheres?'
+    case 'concha': return 'Quantas conchas?'
+    case 'copo': return 'Quantos copos?'
+    case 'scoop': return 'Quantos scoops?'
+    default: return 'Quantidade'
+  }
+}
 
 export default function Registro() {
   const { perfil } = useAuth()
   const navigate = useNavigate()
 
-  // Etapas: 'tipo' -> 'itens' -> 'confirmar'
   const [etapa, setEtapa] = useState('tipo')
   const [tipoSelecionado, setTipoSelecionado] = useState(null)
   const [horario, setHorario] = useState('')
-  const [itens, setItens] = useState([]) // itens adicionados à refeição
+  const [itens, setItens] = useState([])
   const [biblioteca, setBiblioteca] = useState([])
   const [busca, setBusca] = useState('')
-  const [modo, setModo] = useState('biblioteca') // 'biblioteca' | 'texto'
+  const [mostrarTodas, setMostrarTodas] = useState(false)
+  const [modo, setModo] = useState('biblioteca')
   const [texto, setTexto] = useState('')
   const [loadingIA, setLoadingIA] = useState(false)
-  const [itemQtd, setItemQtd] = useState(null) // item aguardando definição de quantidade
+  const [itemQtd, setItemQtd] = useState(null)
   const [qtdInput, setQtdInput] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [nomePersonalizado, setNomePersonalizado] = useState('')
@@ -47,31 +87,39 @@ export default function Registro() {
   function selecionarTipo(tipo) {
     setTipoSelecionado(tipo)
     setHorario(tipo.horario)
+    setMostrarTodas(false)
+    setBusca('')
     setEtapa('itens')
   }
 
   function abrirQuantidade(item) {
     setItemQtd(item)
-    setQtdInput(item.qtd_base?.toString() || '100')
+    setQtdInput(item.unidade === 'g' ? '100' : '1')
+  }
+
+  function calcularMacrosQtd(item, qtd) {
+    const q = parseFloat(qtd) || 0
+    const base = item.qtd_base || 1
+    const fator = item.unidade === 'g' ? q / base : q
+    return {
+      proteina: Math.round(item.proteina * fator * 10) / 10,
+      carb: Math.round(item.carb * fator * 10) / 10,
+      gordura: Math.round(item.gordura * fator * 10) / 10,
+      kcal: Math.round(item.kcal * fator),
+    }
   }
 
   function confirmarQuantidade() {
     if (!itemQtd || !qtdInput) return
-    const qtd = parseFloat(qtdInput)
-    const base = itemQtd.qtd_base || 100
-    const fator = qtd / base
-
+    const macros = calcularMacrosQtd(itemQtd, qtdInput)
     const itemFinal = {
       id: Date.now(),
       nome: itemQtd.nome,
-      quantidade: qtd,
-      proteina: Math.round(itemQtd.proteina * fator * 10) / 10,
-      carb: Math.round(itemQtd.carb * fator * 10) / 10,
-      gordura: Math.round(itemQtd.gordura * fator * 10) / 10,
-      kcal: Math.round(itemQtd.kcal * fator),
+      quantidade: parseFloat(qtdInput),
+      unidade: itemQtd.unidade || 'g',
+      ...macros,
       biblioteca_id: itemQtd.id,
     }
-
     setItens(prev => [...prev, itemFinal])
     setItemQtd(null)
     setQtdInput('')
@@ -90,6 +138,7 @@ export default function Registro() {
         id: Date.now() + i,
         nome: item.nome,
         quantidade: parseFloat(item.quantidade) || 100,
+        unidade: 'g',
         proteina: item.proteina || 0,
         carb: item.carb || 0,
         gordura: item.gordura || 0,
@@ -101,6 +150,7 @@ export default function Registro() {
         id: Date.now(),
         nome: res.descricao || texto,
         quantidade: 1,
+        unidade: 'unidade',
         proteina: res.total.proteina || 0,
         carb: res.total.carb || 0,
         gordura: res.total.gordura || 0,
@@ -112,10 +162,10 @@ export default function Registro() {
   }
 
   const totais = itens.reduce((acc, i) => ({
-    proteina: acc.proteina + i.proteina,
-    carb: acc.carb + i.carb,
-    gordura: acc.gordura + i.gordura,
-    kcal: acc.kcal + i.kcal,
+    proteina: acc.proteina + (i.proteina || 0),
+    carb: acc.carb + (i.carb || 0),
+    gordura: acc.gordura + (i.gordura || 0),
+    kcal: acc.kcal + (i.kcal || 0),
   }), { proteina: 0, carb: 0, gordura: 0, kcal: 0 })
 
   async function salvarRefeicao() {
@@ -123,21 +173,18 @@ export default function Registro() {
     setSalvando(true)
     try {
       const nome = nomePersonalizado || tipoSelecionado?.label || 'Refeição'
-      const horaFinal = horario || new Date().toTimeString().slice(0, 5)
-
       await supabase.from('refeicoes').insert({
         user_id: perfil.user_id,
         data: hoje,
         nome,
         tipo: tipoSelecionado?.val || 'outro',
-        horario: horaFinal,
+        horario: horario || new Date().toTimeString().slice(0, 5),
         proteina: Math.round(totais.proteina),
         carb: Math.round(totais.carb),
         gordura: Math.round(totais.gordura),
         kcal: Math.round(totais.kcal),
         itens: JSON.stringify(itens),
       })
-
       navigate('/')
     } catch (err) {
       console.error(err)
@@ -158,27 +205,19 @@ export default function Registro() {
       gordura: Math.round(totais.gordura),
       kcal: Math.round(totais.kcal),
       qtd_base: 1,
+      unidade: 'unidade',
       padrao: false,
     })
-    alert('Refeição salva na biblioteca!')
+    alert('Salvo na biblioteca!')
   }
 
-  const categorias = {
-    cafe: '☀️ Café da manhã',
-    almoco: '🍽️ Almoço / Janta',
-    acomp: '🥗 Acompanhamentos',
-    completo: '🥘 Pratos completos',
-    lanche: '🍔 Lanches',
-    leve: '🍎 Lanches leves',
-    marmita: '📦 Marmitas',
-    personalizado: '⭐ Minhas refeições',
-    jantar: '🌙 Jantar',
-    outro: '➕ Outros',
-  }
-
-  const bibliotecaFiltrada = biblioteca.filter(b =>
-    b.nome.toLowerCase().includes(busca.toLowerCase())
-  )
+  // Filtra biblioteca por categorias do tipo OU busca
+  const bibliotecaFiltrada = biblioteca.filter(b => {
+    const matchBusca = b.nome.toLowerCase().includes(busca.toLowerCase())
+    if (busca) return matchBusca
+    if (mostrarTodas || !tipoSelecionado || tipoSelecionado.cats.length === 0) return true
+    return tipoSelecionado.cats.includes(b.categoria)
+  })
 
   const porCategoria = bibliotecaFiltrada.reduce((acc, item) => {
     const cat = item.categoria || 'personalizado'
@@ -187,157 +226,142 @@ export default function Registro() {
     return acc
   }, {})
 
-  // ─── ETAPA 1: Escolher tipo de refeição ───
+  const macrosPreview = itemQtd && qtdInput ? calcularMacrosQtd(itemQtd, qtdInput) : null
+
+  // ─── ETAPA 1 ───
   if (etapa === 'tipo') return (
     <div className="fade-in">
-      <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Nova refeição</h2>
-      <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 24 }}>Qual refeição você vai registrar?</p>
+      <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 4 }}>Nova refeição</h2>
+      <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 20 }}>Qual refeição você vai registrar?</p>
 
       {TIPOS_REFEICAO.map(tipo => (
-        <button
-          key={tipo.val}
-          onClick={() => selecionarTipo(tipo)}
-          style={{
-            width: '100%', padding: '16px', marginBottom: 10,
-            background: 'var(--surface)', border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)', cursor: 'pointer', textAlign: 'left',
-            display: 'flex', alignItems: 'center', gap: 14, transition: 'all 0.2s',
-          }}
+        <button key={tipo.val} onClick={() => selecionarTipo(tipo)} style={{
+          width: '100%', padding: '14px 16px', marginBottom: 8,
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)', cursor: 'pointer', textAlign: 'left',
+          display: 'flex', alignItems: 'center', gap: 12, transition: 'border-color 0.2s',
+        }}
           onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
           onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
         >
-          <span style={{ fontSize: 24 }}>{tipo.icon}</span>
+          <span style={{ fontSize: 22 }}>{tipo.icon}</span>
           <div>
-            <div style={{ fontWeight: 500, fontSize: 15 }}>{tipo.label}</div>
-            {tipo.horario && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Horário sugerido: {tipo.horario}</div>}
+            <div style={{ fontWeight: 500, fontSize: 14, color: 'var(--text)' }}>{tipo.label}</div>
+            {tipo.horario && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 1 }}>Horário sugerido: {tipo.horario}</div>}
           </div>
         </button>
       ))}
     </div>
   )
 
-  // ─── ETAPA 2: Adicionar itens ───
+  // ─── ETAPA 2 ───
   if (etapa === 'itens') return (
     <div className="fade-in">
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-        <button onClick={() => setEtapa('tipo')} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 18 }}>←</button>
-        <h2 style={{ fontSize: 20, fontWeight: 600 }}>{tipoSelecionado?.icon} {tipoSelecionado?.label}</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <button onClick={() => setEtapa('tipo')} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, padding: '4px 0' }}>←</button>
+        <h2 style={{ fontSize: 18, fontWeight: 600 }}>{tipoSelecionado?.icon} {tipoSelecionado?.label}</h2>
       </div>
 
       {/* Horário */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-        <label style={{ fontSize: 13, color: 'var(--text2)', whiteSpace: 'nowrap' }}>Horário da refeição:</label>
-        <input
-          type="time"
-          value={horario}
-          onChange={e => setHorario(e.target.value)}
-          style={{ width: 'auto', padding: '6px 10px', fontSize: 14 }}
-        />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, padding: '8px 12px', background: 'var(--surface2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+        <span style={{ fontSize: 13, color: 'var(--text2)' }}>🕐 Horário:</span>
+        <input type="time" value={horario} onChange={e => setHorario(e.target.value)}
+          style={{ width: 'auto', padding: '2px 6px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent)' }} />
+        <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 4 }}>pode editar</span>
       </div>
 
       {/* Itens adicionados */}
       {itens.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <div className="section-title">Itens adicionados ({itens.length})</div>
+        <div style={{ marginBottom: 16 }}>
+          <div className="section-title">Na refeição ({itens.length} itens)</div>
           {itens.map(item => (
             <div key={item.id} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 12px', background: 'var(--surface2)',
-              borderRadius: 'var(--radius-sm)', marginBottom: 6,
+              padding: '8px 10px', background: 'var(--surface2)',
+              borderRadius: 'var(--radius-sm)', marginBottom: 4,
               border: '1px solid var(--border)',
             }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{item.nome} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({item.quantidade}g)</span></div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                  P:{item.proteina}g C:{item.carb}g G:{item.gordura}g {item.kcal}kcal
+                <div style={{ fontSize: 13 }}>
+                  <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginRight: 6 }}>
+                    {labelUnidade(item.unidade, item.quantidade)}
+                  </span>
+                  {item.nome}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 1 }}>
+                  P:{item.proteina}g C:{item.carb}g G:{item.gordura}g · {item.kcal}kcal
                 </div>
               </div>
-              <button onClick={() => removerItem(item.id)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16, padding: '0 0 0 10px' }}>🗑</button>
+              <button onClick={() => removerItem(item.id)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding: '0 0 0 8px', fontSize: 14 }}>✕</button>
             </div>
           ))}
 
-          {/* Totais parciais */}
-          <div style={{ display: 'flex', gap: 10, padding: '10px 12px', background: 'var(--accent-dim)', borderRadius: 'var(--radius-sm)', marginTop: 8 }}>
+          {/* Totais */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, padding: '8px 10px', background: 'var(--accent-dim)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
             {[
               { l: 'P', v: Math.round(totais.proteina), c: 'var(--accent)' },
               { l: 'C', v: Math.round(totais.carb), c: 'var(--blue)' },
               { l: 'G', v: Math.round(totais.gordura), c: 'var(--orange)' },
-              { l: 'kcal', v: Math.round(totais.kcal), c: '#a78bfa' },
+              { l: 'kcal', v: Math.round(totais.kcal), c: 'var(--text2)' },
             ].map(m => (
-              <div key={m.l} style={{ textAlign: 'center', flex: 1 }}>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 500, color: m.c }}>{m.v}{m.l !== 'kcal' ? 'g' : ''}</div>
-                <div style={{ fontSize: 10, color: 'var(--text3)' }}>{m.l}</div>
+              <div key={m.l} style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 500, color: m.c }}>{m.v}{m.l !== 'kcal' ? 'g' : ''}</div>
+                <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 1 }}>{m.l.toUpperCase()}</div>
               </div>
             ))}
           </div>
 
-          <button className="btn btn-primary btn-full" style={{ marginTop: 12 }} onClick={() => setEtapa('confirmar')}>
+          <button className="btn btn-primary btn-full" style={{ marginTop: 10 }} onClick={() => setEtapa('confirmar')}>
             Confirmar refeição →
           </button>
         </div>
       )}
 
-      {/* Modal de quantidade */}
+      {/* Modal quantidade */}
       {itemQtd && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 999,
-        }}>
-          <div style={{ background: 'var(--surface)', borderRadius: '20px 20px 0 0', padding: '24px 20px', width: '100%', maxWidth: 480 }}>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>{itemQtd.nome}</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>
-              Base: {itemQtd.qtd_base || 100}g → P:{itemQtd.proteina}g C:{itemQtd.carb}g G:{itemQtd.gordura}g
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 999 }}>
+          <div style={{ background: 'var(--surface)', borderRadius: '16px 16px 0 0', padding: '20px', width: '100%', maxWidth: 480 }}>
+            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 3 }}>{itemQtd.nome}</div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 14 }}>
+              Por {itemQtd.unidade === 'g' ? `${itemQtd.qtd_base}g` : `${labelUnidade(itemQtd.unidade, 1)}`}: P:{itemQtd.proteina}g C:{itemQtd.carb}g G:{itemQtd.gordura}g · {itemQtd.kcal}kcal
             </div>
+
             <div className="form-group">
-              <label className="form-label">Quantidade que você comeu (g)</label>
-              <input
-                type="number"
-                value={qtdInput}
-                onChange={e => setQtdInput(e.target.value)}
-                autoFocus
-                placeholder="Ex: 150"
-              />
+              <label className="form-label">{placeholderUnidade(itemQtd.unidade)}</label>
+              <input type="number" value={qtdInput} onChange={e => setQtdInput(e.target.value)} autoFocus min="0" step={itemQtd.unidade === 'g' ? '10' : '1'} />
             </div>
-            {qtdInput && (
-              <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 16, fontFamily: 'var(--font-mono)' }}>
-                → P:{Math.round(itemQtd.proteina * parseFloat(qtdInput) / (itemQtd.qtd_base || 100))}g{' '}
-                C:{Math.round(itemQtd.carb * parseFloat(qtdInput) / (itemQtd.qtd_base || 100))}g{' '}
-                G:{Math.round(itemQtd.gordura * parseFloat(qtdInput) / (itemQtd.qtd_base || 100))}g{' '}
-                {Math.round(itemQtd.kcal * parseFloat(qtdInput) / (itemQtd.qtd_base || 100))}kcal
+
+            {macrosPreview && parseFloat(qtdInput) > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 14, padding: '6px 10px', background: 'var(--surface2)', borderRadius: 'var(--radius-xs)', fontFamily: 'var(--font-mono)' }}>
+                → P:{macrosPreview.proteina}g C:{macrosPreview.carb}g G:{macrosPreview.gordura}g · {macrosPreview.kcal}kcal
               </div>
             )}
+
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-ghost" onClick={() => setItemQtd(null)} style={{ flex: 1 }}>Cancelar</button>
-              <button className="btn btn-primary" onClick={confirmarQuantidade} style={{ flex: 2 }}>Adicionar</button>
+              <button className="btn btn-primary" onClick={confirmarQuantidade} disabled={!qtdInput || parseFloat(qtdInput) <= 0} style={{ flex: 2 }}>Adicionar</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Tabs biblioteca / texto */}
-      <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 'var(--radius)', padding: 4, marginBottom: 16 }}>
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 'var(--radius)', padding: 3, marginBottom: 14 }}>
         {[{ val: 'biblioteca', label: '📚 Biblioteca' }, { val: 'texto', label: '✏️ Texto livre' }].map(t => (
           <button key={t.val} onClick={() => setModo(t.val)} style={{
-            flex: 1, padding: '9px', border: 'none', borderRadius: 'var(--radius-sm)',
+            flex: 1, padding: '8px', border: 'none', borderRadius: 'var(--radius-sm)',
             background: modo === t.val ? 'var(--accent)' : 'transparent',
-            color: modo === t.val ? '#111' : 'var(--text2)',
-            fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500, cursor: 'pointer', transition: 'all 0.2s',
+            color: modo === t.val ? '#1a1510' : 'var(--text2)',
+            fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.2s',
           }}>{t.label}</button>
         ))}
       </div>
 
-      {/* Modo texto */}
+      {/* Texto livre */}
       {modo === 'texto' && (
         <div>
           <div className="form-group">
-            <textarea
-              placeholder="Ex: 200g de frango grelhado com brócolis e azeite..."
-              value={texto}
-              onChange={e => setTexto(e.target.value)}
-              rows={3}
-              style={{ resize: 'none' }}
-            />
+            <textarea placeholder="Ex: 200g de frango grelhado com brócolis e azeite..." value={texto} onChange={e => setTexto(e.target.value)} rows={3} style={{ resize: 'none' }} />
           </div>
           <button className="btn btn-primary btn-full" onClick={interpretarTexto} disabled={loadingIA || !texto.trim()}>
             {loadingIA ? '🤖 Calculando...' : '🤖 Calcular e adicionar'}
@@ -345,36 +369,49 @@ export default function Registro() {
         </div>
       )}
 
-      {/* Modo biblioteca */}
+      {/* Biblioteca */}
       {modo === 'biblioteca' && (
         <div>
-          <div className="form-group">
-            <input placeholder="Buscar alimento..." value={busca} onChange={e => setBusca(e.target.value)} />
+          <div style={{ marginBottom: 10, display: 'flex', gap: 8 }}>
+            <input placeholder="Buscar alimento..." value={busca} onChange={e => setBusca(e.target.value)} style={{ flex: 1 }} />
           </div>
+
+          {/* Toggle mostrar todas */}
+          {!busca && tipoSelecionado?.cats.length > 0 && (
+            <button onClick={() => setMostrarTodas(p => !p)} style={{
+              background: 'none', border: 'none', color: 'var(--accent)', fontSize: 12,
+              cursor: 'pointer', padding: '0 0 12px', fontFamily: 'var(--font-mono)',
+            }}>
+              {mostrarTodas ? '← Mostrar só do café da manhã' : 'Ver todos os alimentos →'}
+            </button>
+          )}
+
           {Object.entries(porCategoria).map(([cat, items]) => (
             <div key={cat} style={{ marginBottom: 16 }}>
-              <div className="section-title">{categorias[cat] || cat}</div>
+              <div className="section-title">{LABEL_CATS[cat] || cat}</div>
               {items.map(item => (
-                <div
-                  key={item.id}
-                  className="card"
-                  style={{ marginBottom: 6, cursor: 'pointer', padding: '10px 14px' }}
-                  onClick={() => abrirQuantidade({ ...item, qtd_base: item.qtd_base || 100 })}
+                <div key={item.id} onClick={() => abrirQuantidade(item)} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '10px 12px', background: 'var(--surface)',
+                  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+                  marginBottom: 5, cursor: 'pointer', transition: 'border-color 0.15s',
+                }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 3 }}>{item.nome}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--font-mono)' }}>
-                        P:{item.proteina}g C:{item.carb}g G:{item.gordura}g {item.kcal}kcal
-                        <span style={{ color: 'var(--text3)', marginLeft: 6 }}>/ {item.qtd_base || 100}g</span>
-                      </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.nome}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--font-mono)' }}>
+                      por {item.unidade === 'g' ? `${item.qtd_base}g` : labelUnidade(item.unidade, 1)}
+                      {' · '}P:{item.proteina}g C:{item.carb}g G:{item.gordura}g
                     </div>
-                    <span style={{ color: 'var(--accent)', fontSize: 20, paddingLeft: 8 }}>+</span>
                   </div>
+                  <span style={{ color: 'var(--accent)', fontSize: 18, paddingLeft: 8, fontWeight: 300 }}>+</span>
                 </div>
               ))}
             </div>
           ))}
+
           {bibliotecaFiltrada.length === 0 && (
             <div className="empty-state"><div className="empty-icon">🔍</div><div>Nenhum alimento encontrado.</div></div>
           )}
@@ -386,49 +423,45 @@ export default function Registro() {
   // ─── ETAPA 3: Confirmar ───
   if (etapa === 'confirmar') return (
     <div className="fade-in">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-        <button onClick={() => setEtapa('itens')} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 18 }}>←</button>
-        <h2 style={{ fontSize: 20, fontWeight: 600 }}>Confirmar refeição</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+        <button onClick={() => setEtapa('itens')} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16 }}>←</button>
+        <h2 style={{ fontSize: 18, fontWeight: 600 }}>Confirmar refeição</h2>
       </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 16 }}>{tipoSelecionado?.icon} {tipoSelecionado?.label}</div>
-            <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 2 }}>🕐 {horario || 'Horário não definido'}</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{tipoSelecionado?.icon} {tipoSelecionado?.label}</div>
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>🕐 {horario || '--:--'}</div>
           </div>
         </div>
 
-        {/* Nome personalizado */}
         <div className="form-group">
-          <label className="form-label">Nome da refeição (opcional)</label>
-          <input
-            placeholder={tipoSelecionado?.label}
-            value={nomePersonalizado}
-            onChange={e => setNomePersonalizado(e.target.value)}
-          />
+          <label className="form-label">Nome personalizado (opcional)</label>
+          <input placeholder={tipoSelecionado?.label} value={nomePersonalizado} onChange={e => setNomePersonalizado(e.target.value)} />
         </div>
 
-        {/* Itens */}
-        <div className="section-title" style={{ marginTop: 8 }}>Itens ({itens.length})</div>
+        <div className="section-title" style={{ marginTop: 4 }}>Itens ({itens.length})</div>
         {itens.map(item => (
-          <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
-            <span>{item.nome} <span style={{ color: 'var(--text3)' }}>({item.quantidade}g)</span></span>
-            <span style={{ color: 'var(--text2)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{item.kcal}kcal</span>
+          <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
+            <span>
+              <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginRight: 6, fontSize: 12 }}>{labelUnidade(item.unidade, item.quantidade)}</span>
+              {item.nome}
+            </span>
+            <span style={{ color: 'var(--text3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{item.kcal}kcal</span>
           </div>
         ))}
 
-        {/* Totais */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginTop: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginTop: 12 }}>
           {[
             { l: 'Proteína', v: Math.round(totais.proteina), u: 'g', c: 'var(--accent)' },
             { l: 'Carbo', v: Math.round(totais.carb), u: 'g', c: 'var(--blue)' },
             { l: 'Gordura', v: Math.round(totais.gordura), u: 'g', c: 'var(--orange)' },
-            { l: 'Kcal', v: Math.round(totais.kcal), u: '', c: '#a78bfa' },
+            { l: 'Kcal', v: Math.round(totais.kcal), u: '', c: 'var(--text2)' },
           ].map(m => (
-            <div key={m.l} style={{ textAlign: 'center', background: 'var(--surface2)', borderRadius: 'var(--radius-sm)', padding: '8px 4px' }}>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 500, color: m.c }}>{m.v}{m.u}</div>
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{m.l}</div>
+            <div key={m.l} style={{ textAlign: 'center', background: 'var(--surface2)', borderRadius: 'var(--radius-sm)', padding: '7px 4px' }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: 500, color: m.c }}>{m.v}{m.u}</div>
+              <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 2 }}>{m.l}</div>
             </div>
           ))}
         </div>
